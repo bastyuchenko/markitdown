@@ -900,7 +900,7 @@ class TestCLIArgs:
             ],
         )
         markitdown_instance.convert.assert_called_once_with(
-            "fake.pdf", stream_info=None, keep_data_uris=False
+            "fake.pdf", stream_info=None, keep_data_uris=False, inline_comments=True
         )
         assert capsys.readouterr().out == "converted\n"
 
@@ -936,7 +936,11 @@ class TestCLIArgs:
         assert markitdown_instance.convert_stream.call_count == 1
         call_args, call_kwargs = markitdown_instance.convert_stream.call_args
         assert call_args[0].read() == b"fake pdf"
-        assert call_kwargs == {"stream_info": None, "keep_data_uris": False}
+        assert call_kwargs == {
+            "stream_info": None,
+            "keep_data_uris": False,
+            "inline_comments": True,
+        }
         assert capsys.readouterr().out == "converted\n"
 
 

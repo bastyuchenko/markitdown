@@ -423,6 +423,8 @@ CMYK_NAMES = ("DeviceCMYK", "CMYK")
 TILE_TOLERANCE = 1.0
 # Refuse to build a stitched canvas larger than this, to stay out of memory trouble.
 MAX_CANVAS_PIXELS = 80_000_000
+# Above this many images on one page, skip the quadratic tile grouping entirely.
+MAX_TILE_RECORDS = 1500
 
 
 def walk(container):
@@ -705,6 +707,11 @@ def are_tiles(a, b):
 
 def group_tiles(records):
     """Union-find over placements, so a whole grid of tiles ends up in one group."""
+    # The pairwise scan below is quadratic; a page carrying thousands of fragments is
+    # pathological, so leave those alone rather than spending minutes on them.
+    if len(records) > MAX_TILE_RECORDS:
+        return [[record] for record in records]
+
     parent = list(range(len(records)))
 
     def find(i):

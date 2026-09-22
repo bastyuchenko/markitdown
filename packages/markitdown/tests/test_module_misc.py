@@ -387,6 +387,42 @@ def test_docx_comments() -> None:
     validate_strings(result, DOCX_COMMENT_TEST_STRINGS)
 
 
+def test_docx_inline_comments() -> None:
+    # Comments are inlined next to the text they annotate, by default
+    result = MarkItDown().convert(
+        os.path.join(TEST_FILES_DIR, "test_with_comment.docx")
+    )
+    assert "[comment: This is a test comment. 12df-321a]" in result.text_content
+    # ...including comments anchored inside a table
+    assert (
+        "[comment: Yet another comment in the doc. 55yiyi-asd09]" in result.text_content
+    )
+
+    # ...and are omitted when explicitly disabled
+    result = MarkItDown().convert(
+        os.path.join(TEST_FILES_DIR, "test_with_comment.docx"), inline_comments=False
+    )
+    assert "12df-321a" not in result.text_content
+    assert "55yiyi-asd09" not in result.text_content
+
+
+def test_docx_comment_threads() -> None:
+    # A comment covering a span of text delimits that span, and replies are
+    # chained onto the comment they answer rather than repeated separately
+    result = MarkItDown().convert(
+        os.path.join(TEST_FILES_DIR, "test_with_comment_thread.docx")
+    )
+    assert (
+        "⟦AutoGen is an open-source framework that allows developers to build "
+        "LLM applications⟧ [comment: This is a test comment. 12df-321a "
+        "↳ reply: I agree, but please cite the paper. reply-one-x1 "
+        "↳ reply: Citation added, thanks. reply-two-x2]"
+    ) in result.text_content
+    # The replies appear only as part of the thread
+    assert result.text_content.count("reply-one-x1") == 1
+    assert result.text_content.count("reply-two-x2") == 1
+
+
 def _write_underlined_docx(
     path,
     embedded_style_map: Optional[str] = None,
@@ -1904,6 +1940,8 @@ if __name__ == "__main__":
         test_data_uris,
         test_file_uris,
         test_docx_comments,
+        test_docx_inline_comments,
+        test_docx_comment_threads,
         test_docx_zip_filename_casing_mismatch,
         test_docx_zip_filename_non_casing_mismatch_still_rejected,
         test_zip_duplicate_filenames_preserve_each_entry,
