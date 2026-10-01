@@ -87,7 +87,9 @@ class DocxConverter(HtmlConverter):
                 _dependency_exc_info[2]
             )
 
-        pre_process_stream = pre_process_docx(file_stream)
+        pre_process_stream = pre_process_docx(
+            file_stream, inline_comments=kwargs.get("inline_comments", True)
+        )
 
         caller_style_map = kwargs.get("style_map")
         embedded_style_map = _read_embedded_style_map(pre_process_stream)

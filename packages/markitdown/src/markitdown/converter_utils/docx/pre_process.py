@@ -1,12 +1,21 @@
 import struct
 import zipfile
+from functools import partial
 from io import BytesIO
-from typing import BinaryIO
+from typing import Any, BinaryIO, Dict, List
 from xml.etree import ElementTree as ET
 
 from bs4 import BeautifulSoup, Tag
 
 from .math.omml import OMML_NS, oMath2Latex
+
+# How an inlined comment is rendered. The commented words are delimited so that
+# it is clear which text a comment refers to, and replies are chained onto the
+# comment they answer.
+COMMENT_SPAN_OPEN = "⟦"
+COMMENT_SPAN_CLOSE = "⟧"
+COMMENT_TEMPLATE = " [comment: {0}]"
+COMMENT_REPLY_PREFIX = " ↳ reply: "
 
 MATH_ROOT_TEMPLATE = "".join(
     (
@@ -247,7 +256,246 @@ def _pre_process_styles(content: bytes) -> bytes:
     return etree.tostring(root.getroottree(), encoding="utf-8", xml_declaration=True)
 
 
-def pre_process_docx(input_docx: BinaryIO) -> BinaryIO:
+def _index_by_comment_id(tags: List[Tag]) -> Dict[str, Tag]:
+    """
+    Indexes comment-related tags by the comment id they carry.
+
+    Args:
+        tags (List[Tag]): BeautifulSoup Tag objects carrying a "w:id" attribute.
+
+    Returns:
+        Dict[str, Tag]: Mapping of comment id to the tag that carries it.
+    """
+    indexed = {}
+    for tag in tags:
+        tag_id = tag.get("w:id")
+        if tag_id is not None:
+            indexed[str(tag_id)] = tag
+    return indexed
+
+
+def _get_comment_text(element: Tag) -> str:
+    """
+    Extracts the plain text of a comment, flattening a multi-paragraph comment
+    into a single line.
+
+    Args:
+        element (Tag): A BeautifulSoup Tag object representing a "comment" element.
+
+    Returns:
+        str: The comment text, with paragraphs separated by spaces.
+    """
+    paragraphs = []
+    for para in element.find_all("p"):
+        runs = "".join(t.get_text() for t in para.find_all("t")).strip()
+        if runs:
+            paragraphs.append(runs)
+    if not paragraphs:
+        # Comments authored by some tools hold their runs outside of a paragraph
+        fallback = "".join(t.get_text() for t in element.find_all("t")).strip()
+        if fallback:
+            paragraphs.append(fallback)
+    return " ".join(paragraphs)
+
+
+def _load_comments(comments_xml: bytes) -> Dict[str, Dict[str, Any]]:
+    """
+    Parses word/comments.xml into a mapping of comment id to its text and
+    paragraph ids.
+
+    The paragraph ids (w14:paraId) are retained because Word links a reply to
+    the comment it answers by paragraph id rather than by comment id.
+
+    Args:
+        comments_xml (bytes): The XML content of word/comments.xml.
+
+    Returns:
+        Dict[str, Dict[str, Any]]: Mapping of comment id to {"text", "para_ids"}.
+    """
+    soup = BeautifulSoup(comments_xml.decode(), features="xml")
+    comments: Dict[str, Dict[str, Any]] = {}
+    for comment in soup.find_all("comment"):
+        raw_id = comment.get("w:id")
+        if raw_id is None:
+            continue
+        comments[str(raw_id)] = {
+            "text": _get_comment_text(comment),
+            "para_ids": [
+                p.get("w14:paraId")
+                for p in comment.find_all("p")
+                if p.get("w14:paraId")
+            ],
+        }
+    return comments
+
+
+def _load_comment_parents(
+    comments_extended_xml: bytes, comments: Dict[str, Dict[str, Any]]
+) -> Dict[str, str]:
+    """
+    Parses word/commentsExtended.xml into a mapping of reply id to parent id.
+
+    Args:
+        comments_extended_xml (bytes): The XML content of word/commentsExtended.xml.
+        comments (Dict[str, Dict[str, Any]]): The comments, as returned by _load_comments.
+
+    Returns:
+        Dict[str, str]: Mapping of a reply's comment id to its parent's comment id.
+    """
+    para_to_comment = {}
+    for comment_id, data in comments.items():
+        for para_id in data["para_ids"]:
+            para_to_comment[para_id] = comment_id
+
+    soup = BeautifulSoup(comments_extended_xml.decode(), features="xml")
+    parents: Dict[str, str] = {}
+    for comment_ex in soup.find_all("commentEx"):
+        para_id = comment_ex.get("w15:paraId")
+        parent_para_id = comment_ex.get("w15:paraIdParent")
+        if not para_id or not parent_para_id:
+            continue
+        child = para_to_comment.get(para_id)
+        parent = para_to_comment.get(parent_para_id)
+        if child and parent and child != parent:
+            parents[child] = parent
+    return parents
+
+
+def _build_comment_threads(
+    comments: Dict[str, Dict[str, Any]], parents: Dict[str, str]
+) -> Dict[str, str]:
+    """
+    Groups replies with the comment they answer and renders each thread.
+
+    A thread is rendered once, at the place its first comment is anchored, so
+    that a chain of replies stays next to the text it discusses.
+
+    Args:
+        comments (Dict[str, Dict[str, Any]]): The comments, as returned by _load_comments.
+        parents (Dict[str, str]): Reply-to-parent mapping, as returned by _load_comment_parents.
+
+    Returns:
+        Dict[str, str]: Mapping of the thread's root comment id to its rendered text.
+    """
+
+    def root_of(comment_id: str) -> str:
+        seen = {comment_id}
+        while comment_id in parents:
+            comment_id = parents[comment_id]
+            if comment_id in seen:  # guard against malformed, cyclic parent data
+                break
+            seen.add(comment_id)
+        return comment_id
+
+    grouped: Dict[str, List[str]] = {}
+    for comment_id in sorted(
+        comments, key=lambda c: int(c) if c.lstrip("-").isdigit() else 0
+    ):
+        grouped.setdefault(root_of(comment_id), []).append(comment_id)
+
+    threads = {}
+    for root_id, thread in grouped.items():
+        # The root opens the thread even if a reply was given a lower id
+        ordered = [root_id] + [c for c in thread if c != root_id]
+        texts = [comments[c]["text"] for c in ordered if comments[c]["text"]]
+        if texts:
+            threads[root_id] = COMMENT_TEMPLATE.format(
+                texts[0] + "".join(COMMENT_REPLY_PREFIX + t for t in texts[1:])
+            )
+    return threads
+
+
+def _load_comment_threads(files: Dict[str, bytes]) -> Dict[str, str]:
+    """
+    Reads the comment-related parts of a DOCX file and renders each thread.
+
+    Args:
+        files (Dict[str, bytes]): The contents of the DOCX file, keyed by name.
+
+    Returns:
+        Dict[str, str]: Mapping of the thread's root comment id to its rendered text.
+    """
+    comments_xml = files.get("word/comments.xml")
+    if not comments_xml:
+        return {}
+
+    comments = _load_comments(comments_xml)
+    if not comments:
+        return {}
+
+    # commentsExtended.xml is absent unless the document has threaded replies
+    comments_extended_xml = files.get("word/commentsExtended.xml")
+    parents = (
+        _load_comment_parents(comments_extended_xml, comments)
+        if comments_extended_xml
+        else {}
+    )
+    return _build_comment_threads(comments, parents)
+
+
+def _get_text_tag_replacement(text: str) -> Tag:
+    """
+    Creates a run holding a literal piece of text.
+
+    Args:
+        text (str): The text to wrap.
+
+    Returns:
+        Tag: A BeautifulSoup Tag object representing a "w:r" element.
+    """
+    t_tag = Tag(name="w:t")
+    t_tag["xml:space"] = "preserve"
+    t_tag.string = text
+    r_tag = Tag(name="w:r")
+    r_tag.append(t_tag)
+    return r_tag
+
+
+def _pre_process_comments(content: bytes, threads: Dict[str, str]) -> bytes:
+    """
+    Pre-processes a DOCX -> XML file by inlining comment text into the body.
+
+    The commented words are delimited so that it is clear what a comment refers
+    to, and the comment itself is placed immediately after them. Comments are
+    injected as ordinary runs, so they survive conversion to HTML and Markdown.
+
+    Args:
+        content (bytes): The XML content of word/document.xml as bytes.
+        threads (Dict[str, str]): Rendered threads keyed by root comment id.
+
+    Returns:
+        bytes: The processed content with comments inlined, encoded as bytes.
+    """
+    soup = BeautifulSoup(content.decode(), features="xml")
+
+    range_starts = _index_by_comment_id(soup.find_all("commentRangeStart"))
+    range_ends = _index_by_comment_id(soup.find_all("commentRangeEnd"))
+    # Anchor on the enclosing run so the comment lands outside of it
+    references = {
+        comment_id: tag.find_parent("r") or tag
+        for comment_id, tag in _index_by_comment_id(
+            soup.find_all("commentReference")
+        ).items()
+    }
+
+    for comment_id, rendered in threads.items():
+        range_start = range_starts.get(comment_id)
+        range_end = range_ends.get(comment_id)
+        if range_start is not None and range_end is not None:
+            # The comment covers a span of text: delimit it, then append the comment
+            range_start.insert_after(_get_text_tag_replacement(COMMENT_SPAN_OPEN))
+            range_end.insert_before(_get_text_tag_replacement(COMMENT_SPAN_CLOSE))
+            range_end.insert_after(_get_text_tag_replacement(rendered))
+        else:
+            # No span was recorded, so fall back to the comment's anchor point
+            anchor = references.get(comment_id)
+            if anchor is not None:
+                anchor.insert_after(_get_text_tag_replacement(rendered))
+
+    return str(soup).encode()
+
+
+def pre_process_docx(input_docx: BinaryIO, inline_comments: bool = True) -> BinaryIO:
     """
     Pre-processes a DOCX file with provided steps.
 
@@ -257,6 +505,9 @@ def pre_process_docx(input_docx: BinaryIO) -> BinaryIO:
 
     Args:
         input_docx (BinaryIO): A binary input stream representing the DOCX file.
+        inline_comments (bool, optional): If True, review comments are inlined next to
+            the text they annotate, with replies chained onto the comment they answer.
+            Defaults to True.
 
     Returns:
         BinaryIO: A binary output stream representing the processed DOCX file.
@@ -274,6 +525,19 @@ def pre_process_docx(input_docx: BinaryIO) -> BinaryIO:
     }
     with zipfile.ZipFile(input_docx, mode="r") as zip_input:
         files = {name: zip_input.read(name) for name in zip_input.namelist()}
+
+        if inline_comments:
+            try:
+                threads = _load_comment_threads(files)
+            except Exception:
+                # If the comments cannot be read, convert the document without them
+                threads = {}
+            if threads:
+                # Runs added here must not be re-processed by the earlier steps
+                pre_process_enable_files["word/document.xml"] += (
+                    partial(_pre_process_comments, threads=threads),
+                )
+
         with zipfile.ZipFile(output_docx, mode="w") as zip_output:
             zip_output.comment = zip_input.comment
             for name, content in files.items():

@@ -87,6 +87,25 @@ You can also pipe content:
 cat path-to-file.pdf | markitdown
 ```
 
+### Word Comments
+
+Review comments in `.docx` files are included by default, inlined next to the text
+they annotate. The commented words are delimited with `⟦ ⟧`, and replies are chained
+onto the comment they answer:
+
+```markdown
+⟦AutoGen is an open-source framework⟧ [comment: Worth citing the paper here. ↳ reply: Citation added, thanks.]
+```
+
+When a comment marks a point rather than a span — which is also how some non-Word
+editors save every comment — it is placed at that point and no delimiters are added.
+
+Use `--no-comments` to leave comments out:
+
+```bash
+markitdown --no-comments path-to-file.docx
+```
+
 ### Optional Dependencies
 MarkItDown has optional dependencies for activating various file formats. Earlier in this document, we installed all optional dependencies with the `[all]` option. However, you can also install them individually for more control. For example:
 
@@ -269,6 +288,16 @@ from markitdown import MarkItDown
 md = MarkItDown(enable_plugins=False) # Set to True to enable plugins
 result = md.convert("test.xlsx")
 print(result.markdown)
+```
+
+Word comments are inlined by default; pass `inline_comments=False` to leave them out:
+
+```python
+from markitdown import MarkItDown
+
+md = MarkItDown()
+result = md.convert("test.docx", inline_comments=False)
+print(result.text_content)
 ```
 
 Document Intelligence conversion in Python:
