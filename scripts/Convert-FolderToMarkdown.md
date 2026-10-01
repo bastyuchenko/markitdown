@@ -82,7 +82,7 @@ powershell -ExecutionPolicy Bypass -File .\Convert-FolderToMarkdown.ps1 -InputFo
 | `-UsePlugins` | Passes `-p` to markitdown so third-party plugins are used. |
 | `-KeepDataUris` | Passes `--keep-data-uris` so base64 images are kept inline rather than truncated. |
 | `-ExtractImages` | Writes embedded images out as real files, copies in the ones a saved page keeps beside it, and repoints the links at them. Implies `-KeepDataUris`. See section 8. |
-| `-AssetsFolder` | With `-ExtractImages`, collect every image into this one folder under the output root instead of per-document `<name>.assets`. |
+| `-AssetsFolder` | With `-ExtractImages`, collect every image into this one folder under the output root instead of per-document `<name>.assets`. Image names carry the subfolder (`2023_report-001.png`), so same-named documents never collide. |
 | `-MinImagePixels` | With `-ExtractImages`, skip images smaller than this many pixels (width × height). Default `0` keeps everything; `10000` ≈ 100×100. |
 | `-NoImageStitching` | Write each PDF image fragment as its own file instead of reassembling tiled pictures. See section 8. |
 | `-WhatIf` | Dry run: lists what would be converted and where, converts nothing. |
@@ -238,16 +238,41 @@ Use `-AssetsFolder` to collect everything into one folder under the output root 
 .\Convert-FolderToMarkdown.ps1 C:\data\docs -Recurse -ExtractImages -AssetsFolder assets
 ```
 
+```
+docs-md\
+   notes.md                    ![...](assets/notes-001.png)
+   2023\
+      report.md                ![...](../assets/2023_report-001.png)
+   2024\
+      report.md                ![...](../assets/2024_report-001.png)
+   assets\
+      notes-001.png
+      2023_report-001.png
+      2024_report-001.png
+```
+
+In the shared folder an image is named after the document's path below the output folder, with
+`\` turned into `_`. Otherwise the two `report.docx` files above would both claim `report-001.png`,
+and each would delete and overwrite the other's pictures. The name comes from the document's own
+path only, so it stays the same from run to run, including runs that convert just some of the
+files. If two paths flatten to the same name (`a_b\c.docx` and `a\b_c.docx`), both get a short
+tag hashed from their own path: `a_b_c~1f3a9c2e-001.png`.
+
 Details:
 
 - **File type comes from the data URI**, so PNG stays `.png`, JPEG becomes `.jpg`, SVG stays `.svg`.
-- **Identical images are written once.** Files are matched by SHA-256, so a logo repeated on
-  40 slides produces one file and 40 links to it. In `-AssetsFolder` mode the dedupe spans
-  every document, so a shared image is named after whichever document was converted first.
-- **Links are URL-escaped**, so folders and files with spaces (`my report.assets/my%20report-001.png`)
-  work in any Markdown viewer.
-- **Re-runs stay clean.** Before extracting, the script deletes the assets that the *same*
-  document wrote previously (files matching `<name>-###.*`), so `-Force` never leaves orphans.
+- **Identical images are written once per document.** Files are matched by SHA-256, so a logo
+  repeated on 40 slides produces one file and 40 links to it. Documents never share a file, even
+  in `-AssetsFolder` mode. If they did, converting one document again after an edit could change
+  or remove a picture that another document still shows. A logo used by ten documents is
+  therefore stored ten times.
+- **Links are URL-escaped**, so folders and files with spaces (`my report.assets/my%20report-001.png`),
+  brackets or non-Latin letters work in any Markdown viewer. Windows PowerShell and PowerShell 7
+  write the same link.
+- **Re-runs stay clean.** Before extracting, the script deletes the images the *same* document
+  wrote last time (files named exactly `<prefix>-###.<ext>`), so `-Force` does not pile up stale
+  copies. It never touches another document's files. If a name is still taken, for example by an
+  image a viewer holds open, the script skips that name instead of overwriting the file.
 - Size goes back to normal: the same Word file that was 161 KB with inline base64 is **4.7 KB**
   plus a 117 KB PNG next to it.
 
@@ -405,6 +430,11 @@ markitdown "C:\data\docs\problem.pdf" -o "C:\temp\problem.md"
 That is a saved page's `page_files\` folder being converted. Those folders are skipped now, so
 convert again; output from an earlier run can be thrown away. `-ExtractImages` is not the cause —
 the base64 sits inside the page's own scripts and stylesheets, which inline their icons that way.
+
+**Pictures from the wrong document, or missing, in `-AssetsFolder` output**
+Output from before image names carried the subfolder mixed up documents that share a name, such
+as `2023\report.docx` and `2024\report.docx`. Delete the assets folder and convert again with
+`-Force`.
 
 **Nothing was found**
 Without `-Recurse` only the top level of the folder is read. Add `-Recurse` for subfolders,

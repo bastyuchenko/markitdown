@@ -62,7 +62,9 @@
 
 .PARAMETER AssetsFolder
     With -ExtractImages, collect every image into this one folder under the output root
-    (e.g. -AssetsFolder assets) instead of a per-document .assets folder.
+    (e.g. -AssetsFolder assets) instead of a per-document .assets folder. Image names carry
+    the document's subfolder (2023\report.docx -> 2023_report-001.png), so documents with
+    the same name in different subfolders never overwrite each other's images.
 
 .PARAMETER MinImagePixels
     With -ExtractImages, ignore images smaller than this many pixels (width x height).
@@ -86,7 +88,8 @@
 
 .EXAMPLE
     .\Convert-FolderToMarkdown.ps1 C:\data\docs -Recurse -ExtractImages -AssetsFolder assets
-    Same, but every image from every document lands in C:\data\docs-md\assets\.
+    Same, but every image from every document lands in C:\data\docs-md\assets\, named
+    after the document's path: notes-001.png, 2023_report-001.png.
 
 .EXAMPLE
     .\Convert-FolderToMarkdown.ps1 C:\data\docs -WhatIf
@@ -376,27 +379,39 @@ function Get-ImageExtension {
 }
 
 function New-AssetState {
-    <# Per-document bookkeeping for the assets folder: naming, numbering and dedupe. #>
-    param([string] $Dir, [string] $NamePrefix, [hashtable] $HashIndex)
+    <#
+        Per-document bookkeeping for the assets folder: naming, numbering and dedupe.
+        Dedupe stays inside the document even when the folder is shared. A link into
+        another document's file would show the wrong picture, or none, as soon as that
+        document was converted again on its own after an edit.
+    #>
+    param([string] $Dir, [string] $NamePrefix)
 
     return [pscustomobject]@{
         Dir       = $Dir
         Prefix    = $NamePrefix
-        HashIndex = $HashIndex
+        HashIndex = @{}
+        Number    = 0
         Written   = 0
         Sha       = [System.Security.Cryptography.SHA256]::Create()
     }
 }
 
 function Clear-DocumentAsset {
-    <# Removes assets a previous run of this document wrote, so -Force leaves no orphans. #>
+    <#
+        Removes assets a previous run of this document wrote, so -Force leaves no orphans.
+        Only exact <prefix>-<number>.<ext> names go: scan-001.pdf-001.png belongs to
+        scan-001.pdf, not to scan. .md files stay, because with -Recurse a source folder
+        that shares the assets folder's name mirrors its own conversions into it.
+    #>
     param($State)
 
     if (-not (Test-Path -LiteralPath $State.Dir -PathType Container)) { return }
 
-    $stalePattern = '^' + [regex]::Escape($State.Prefix) + '-\d{3}\.'
-    Get-ChildItem -LiteralPath $State.Dir -File |
-        Where-Object { $_.Name -match $stalePattern } |
+    $stalePattern = '^' + [regex]::Escape($State.Prefix) + '-\d{3,}\.[A-Za-z0-9]+$'
+    # -Filter narrows the listing natively; a shared folder can hold every image of the run.
+    Get-ChildItem -LiteralPath $State.Dir -File -Filter ($State.Prefix + '-*') |
+        Where-Object { $_.Name -match $stalePattern -and $_.Extension -ne '.md' } |
         Remove-Item -Force -ErrorAction SilentlyContinue
 }
 
@@ -416,21 +431,52 @@ function Add-Asset {
         New-Item -ItemType Directory -Path $State.Dir -Force | Out-Null
     }
 
-    $State.Written++
-    $fileName = '{0}-{1:d3}{2}' -f $State.Prefix, $State.Written, $Extension
-    $imagePath = Join-Path -Path $State.Dir -ChildPath $fileName
+    # Clear-DocumentAsset already took this document's old files away, so a name that is
+    # still taken (a file it could not delete because something holds it open) is skipped.
+    do {
+        $State.Number++
+        $fileName = '{0}-{1:d3}{2}' -f $State.Prefix, $State.Number, $Extension
+        $imagePath = Join-Path -Path $State.Dir -ChildPath $fileName
+    } while (Test-Path -LiteralPath $imagePath)
+
     [System.IO.File]::WriteAllBytes($imagePath, $Bytes)
+    $State.Written++
     $State.HashIndex[$hash] = $imagePath
 
     return $imagePath
 }
 
 function Get-MarkdownLink {
-    <# Relative, forward-slashed and %20-escaped, so any Markdown viewer can follow it. #>
+    <#
+        Relative, forward-slashed and %20-escaped, so any Markdown viewer can follow it.
+        Built segment by segment: under PowerShell 7, Uri.MakeRelativeUri hands back a path
+        holding non-ASCII text unescaped, raw spaces included, and a raw space ends the link.
+    #>
     param([string] $FromFile, [string] $ToFile)
 
-    $from = New-Object System.Uri($FromFile)
-    return $from.MakeRelativeUri((New-Object System.Uri($ToFile))).ToString()
+    $fromFull = [System.IO.Path]::GetFullPath($FromFile)
+    $toFull   = [System.IO.Path]::GetFullPath($ToFile)
+    if ([System.IO.Path]::GetPathRoot($fromFull) -ne [System.IO.Path]::GetPathRoot($toFull)) {
+        return (New-Object System.Uri($toFull)).AbsoluteUri   # another drive: no relative path
+    }
+
+    $fromParts = [System.IO.Path]::GetDirectoryName($fromFull).TrimEnd('\').Split('\')
+    $toParts   = $toFull.Split('\')
+
+    $common = 0
+    while ($common -lt $fromParts.Length -and $common -lt $toParts.Length - 1 -and
+           [string]::Equals($fromParts[$common], $toParts[$common], [System.StringComparison]::OrdinalIgnoreCase)) {
+        $common++
+    }
+
+    $segments = New-Object System.Collections.Generic.List[string]
+    for ($i = $common; $i -lt $fromParts.Length; $i++) { $segments.Add('..') }
+    for ($i = $common; $i -lt $toParts.Length; $i++) {
+        # .NET Framework leaves !'() as they are, unlike PowerShell 7, and a stray ) ends the link.
+        $segment = [System.Uri]::EscapeDataString($toParts[$i])
+        $segments.Add($segment.Replace('!', '%21').Replace("'", '%27').Replace('(', '%28').Replace(')', '%29'))
+    }
+    return ($segments -join '/')
 }
 
 function Export-EmbeddedImage {
@@ -1291,9 +1337,10 @@ $plan = @(
         }
 
         [pscustomobject]@{
-            Source    = $file
-            TargetDir = $targetDir
-            Output    = $null
+            Source      = $file
+            TargetDir   = $targetDir
+            Output      = $null
+            AssetPrefix = $null
         }
     }
 )
@@ -1328,6 +1375,39 @@ foreach ($item in $plan) {
     $item.Output = Join-Path -Path $item.TargetDir -ChildPath $name
 }
 
+# Extracted images are named <prefix>-001.png. A per-document .assets folder holds one
+# document, so its .md name is enough. A shared -AssetsFolder holds all of them, so there the
+# prefix carries the subfolder too: a\report.md and b\report.md would otherwise both write
+# report-001.png, each deleting and overwriting the other's pictures. The prefix is made
+# from the document's own path, never from enumeration order, so a later run that converts
+# only some of the files cannot hand one document's image names to another.
+foreach ($item in $plan) {
+    $prefix = [System.IO.Path]::GetFileNameWithoutExtension($item.Output)
+    if ($AssetsFolder) {
+        $subfolder = $item.TargetDir.Substring($outRoot.Length).TrimStart('\')
+        if ($subfolder) { $prefix = $subfolder.Replace('\', '_') + '_' + $prefix }
+    }
+    $item.AssetPrefix = $prefix
+}
+
+# a_b\c.md and a\b_c.md still flatten to the same a_b_c. Every document in such a clash gets
+# a tag hashed from its own path, so none of them keeps the plain name just for coming first.
+if ($AssetsFolder) {
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        # Group-Object ignores case, as Windows file names do.
+        foreach ($clash in @($plan | Group-Object -Property AssetPrefix | Where-Object { $_.Count -gt 1 })) {
+            foreach ($item in $clash.Group) {
+                $relative = $item.Output.Substring($outRoot.Length).TrimStart('\').ToLowerInvariant()
+                $digest = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($relative))
+                $item.AssetPrefix += '~' + [System.BitConverter]::ToString($digest, 0, 4).Replace('-', '').ToLowerInvariant()
+            }
+        }
+    } finally {
+        $sha.Dispose()
+    }
+}
+
 # ---------------------------------------------------------------------------
 # Convert
 # ---------------------------------------------------------------------------
@@ -1357,10 +1437,6 @@ $skipped     = 0
 $imagesTotal = 0
 $failures    = New-Object System.Collections.Generic.List[object]
 $index       = 0
-
-# Shared -AssetsFolder mode dedupes images across every document; per-document mode
-# starts a fresh index for each file.
-$sharedHashIndex = @{}
 
 # PDF image extraction needs a python that can import pdfminer, which markitdown[pdf] provides.
 $pdfHelperScript = $null
@@ -1411,16 +1487,13 @@ foreach ($item in $plan) {
     if ($result.ExitCode -eq 0 -and (Test-Path -LiteralPath $output -PathType Leaf)) {
         $imageNote = ''
         if ($ExtractImages) {
-            $baseName = [System.IO.Path]::GetFileNameWithoutExtension($output)
             if ($AssetsFolder) {
                 $assetsDir = Join-Path -Path $outRoot -ChildPath $AssetsFolder
-                $hashIndex = $sharedHashIndex
             } else {
-                $assetsDir = Join-Path -Path $targetDir -ChildPath "$baseName.assets"
-                $hashIndex = @{}
+                $assetsDir = Join-Path -Path $targetDir -ChildPath "$($item.AssetPrefix).assets"
             }
 
-            $assetState = New-AssetState -Dir $assetsDir -NamePrefix $baseName -HashIndex $hashIndex
+            $assetState = New-AssetState -Dir $assetsDir -NamePrefix $item.AssetPrefix
             try {
                 Clear-DocumentAsset -State $assetState
 
