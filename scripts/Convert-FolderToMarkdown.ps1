@@ -76,23 +76,23 @@
     this switch turns that off and writes every fragment as its own file.
 
 .EXAMPLE
-    .\Convert-FolderToMarkdown.ps1 -InputFolder C:\data\docs
-    Converts C:\data\docs\* into C:\data\docs-md\.
+    .\Convert-FolderToMarkdown.ps1 -InputFolder C:\data2md\docs
+    Converts C:\data2md\docs\* into C:\data2md\docs-md\.
 
 .EXAMPLE
-    .\Convert-FolderToMarkdown.ps1 C:\data\docs -Recurse -Include .pdf,.docx -Force
+    .\Convert-FolderToMarkdown.ps1 C:\data2md\docs -Recurse -Include .pdf,.docx -Force
 
 .EXAMPLE
-    .\Convert-FolderToMarkdown.ps1 C:\data\docs -Recurse -ExtractImages
+    .\Convert-FolderToMarkdown.ps1 C:\data2md\docs -Recurse -ExtractImages
     Writes notes.md alongside notes.assets\notes-001.png, with links pointing at the file.
 
 .EXAMPLE
-    .\Convert-FolderToMarkdown.ps1 C:\data\docs -Recurse -ExtractImages -AssetsFolder assets
-    Same, but every image from every document lands in C:\data\docs-md\assets\, named
+    .\Convert-FolderToMarkdown.ps1 C:\data2md\docs -Recurse -ExtractImages -AssetsFolder assets
+    Same, but every image from every document lands in C:\data2md\docs-md\assets\, named
     after the document's path: notes-001.png, 2023_report-001.png.
 
 .EXAMPLE
-    .\Convert-FolderToMarkdown.ps1 C:\data\docs -WhatIf
+    .\Convert-FolderToMarkdown.ps1 C:\data2md\docs -WhatIf
     Lists what would be converted, without running anything.
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
@@ -1247,7 +1247,7 @@ $srcRoot = [System.IO.Path]::GetFullPath(
 if ($OutputFolder) {
     $outRoot = [System.IO.Path]::GetFullPath($OutputFolder).TrimEnd('\')
 } else {
-    # Sibling of the original: C:\data\docs -> C:\data\docs-md
+    # Sibling of the original: C:\data2md\docs -> C:\data2md\docs-md
     $outRoot = Join-Path -Path (Split-Path -Path $srcRoot -Parent) `
                          -ChildPath ((Split-Path -Path $srcRoot -Leaf) + $Suffix)
     $outRoot = $outRoot.TrimEnd('\')

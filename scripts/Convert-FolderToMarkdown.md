@@ -5,7 +5,7 @@ command once per file, and writes the results into a **new folder created next t
 original**. The source folder is never touched.
 
 ```
-C:\data\docs\           ->   C:\data\docs-md\
+C:\data2md\docs\           ->   C:\data2md\docs-md\
    report.pdf                   report.md
    notes.docx                   notes.md
    sheet.xlsx                   sheet.md
@@ -46,10 +46,10 @@ The script finds the executable itself, in this order:
 
 ```powershell
 cd C:\Projects_PoC\markitdown\scripts
-.\Convert-FolderToMarkdown.ps1 -InputFolder C:\data\docs
+.\Convert-FolderToMarkdown.ps1 -InputFolder C:\data2md\docs
 ```
 
-That converts the files directly inside `C:\data\docs` and writes them to `C:\data\docs-md`.
+That converts the files directly inside `C:\data2md\docs` and writes them to `C:\data2md\docs-md`.
 
 If PowerShell blocks the script (`running scripts is disabled on this system`), either
 unblock it once:
@@ -62,7 +62,7 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 or run it without changing any policy:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\Convert-FolderToMarkdown.ps1 -InputFolder C:\data\docs
+powershell -ExecutionPolicy Bypass -File .\Convert-FolderToMarkdown.ps1 -InputFolder C:\data2md\docs
 ```
 
 ## 3. Parameters
@@ -121,32 +121,32 @@ URIs, so one `bundle-client_commons.js` came out as a 4.4 MB `.md` of base64.
 ## 4. Examples
 
 ```powershell
-# Everything under C:\data\docs, including subfolders, tree mirrored into C:\data\docs-md
-.\Convert-FolderToMarkdown.ps1 C:\data\docs -Recurse
+# Everything under C:\data2md\docs, including subfolders, tree mirrored into C:\data2md\docs-md
+.\Convert-FolderToMarkdown.ps1 C:\data2md\docs -Recurse
 
 # Only PDFs and Word files, into a folder you name yourself, overwriting previous results
-.\Convert-FolderToMarkdown.ps1 C:\data\docs D:\markdown\docs -Include .pdf,.docx -Force
+.\Convert-FolderToMarkdown.ps1 C:\data2md\docs D:\markdown\docs -Include .pdf,.docx -Force
 
 # All subfolders, but collect every .md in one flat folder
-.\Convert-FolderToMarkdown.ps1 C:\data\docs -Recurse -Flat
+.\Convert-FolderToMarkdown.ps1 C:\data2md\docs -Recurse -Flat
 
 # Pull the pictures out as real files into <name>.assets next to each .md
-.\Convert-FolderToMarkdown.ps1 C:\data\docs -Recurse -ExtractImages
+.\Convert-FolderToMarkdown.ps1 C:\data2md\docs -Recurse -ExtractImages
 
 # Pages saved with Ctrl+S: the page_files folders are skipped, their pictures copied in
-.\Convert-FolderToMarkdown.ps1 C:\data\pages -Recurse -ExtractImages
+.\Convert-FolderToMarkdown.ps1 C:\data2md\pages -Recurse -ExtractImages
 
-# ...or gather every image into one shared C:\data\docs-md\assets folder
-.\Convert-FolderToMarkdown.ps1 C:\data\docs -Recurse -ExtractImages -AssetsFolder assets
+# ...or gather every image into one shared C:\data2md\docs-md\assets folder
+.\Convert-FolderToMarkdown.ps1 C:\data2md\docs -Recurse -ExtractImages -AssetsFolder assets
 
 # See the plan before committing to it
-.\Convert-FolderToMarkdown.ps1 C:\data\docs -Recurse -WhatIf
+.\Convert-FolderToMarkdown.ps1 C:\data2md\docs -Recurse -WhatIf
 
 # Use a specific markitdown install
-.\Convert-FolderToMarkdown.ps1 C:\data\docs -MarkItDownPath C:\tools\venv\Scripts\markitdown.exe
+.\Convert-FolderToMarkdown.ps1 C:\data2md\docs -MarkItDownPath C:\tools\venv\Scripts\markitdown.exe
 
 # Capture the result object for scripting
-$result = .\Convert-FolderToMarkdown.ps1 C:\data\docs -Recurse
+$result = .\Convert-FolderToMarkdown.ps1 C:\data2md\docs -Recurse
 $result.Failed
 $result.Failures | Format-Table File, Reason
 ```
@@ -155,8 +155,8 @@ $result.Failures | Format-Table File, Reason
 
 ```
 markitdown : C:\Projects_PoC\markitdown\.venv\Scripts\markitdown.exe
-source     : C:\data\docs
-output     : C:\data\docs-md
+source     : C:\data2md\docs
+output     : C:\data2md\docs-md
 files      : 5
 
 ok      notes.docx -> notes.md
@@ -166,8 +166,8 @@ ok      my report.html -> my report.md
 exists  archive.pdf
 
 3 converted, 1 skipped, 1 failed
-output: C:\data\docs-md
-errors: C:\data\docs-md\_markitdown-errors.log
+output: C:\data2md\docs-md
+errors: C:\data2md\docs-md\_markitdown-errors.log
 ```
 
 - `ok` — converted, `.md` written
@@ -216,7 +216,7 @@ What you get depends on the source format:
 Markdown links to point at them. It turns `--keep-data-uris` on for you, so this is all you need:
 
 ```powershell
-.\Convert-FolderToMarkdown.ps1 C:\data\docs -Recurse -ExtractImages
+.\Convert-FolderToMarkdown.ps1 C:\data2md\docs -Recurse -ExtractImages
 ```
 
 Each document gets its own assets folder beside its `.md`:
@@ -235,7 +235,7 @@ docs-md\
 Use `-AssetsFolder` to collect everything into one folder under the output root instead:
 
 ```powershell
-.\Convert-FolderToMarkdown.ps1 C:\data\docs -Recurse -ExtractImages -AssetsFolder assets
+.\Convert-FolderToMarkdown.ps1 C:\data2md\docs -Recurse -ExtractImages -AssetsFolder assets
 ```
 
 ```
@@ -384,7 +384,7 @@ painted a light colour on a dark page will look inverted against a white backgro
   fragments. `-MinImagePixels 10000` drops anything smaller than roughly 100x100.
 
 ```powershell
-.\Convert-FolderToMarkdown.ps1 C:\data\pdfs -ExtractImages -MinImagePixels 10000
+.\Convert-FolderToMarkdown.ps1 C:\data2md\pdfs -ExtractImages -MinImagePixels 10000
 ```
 
 ### What extraction cannot recover
@@ -423,7 +423,7 @@ Open `_markitdown-errors.log` in the output folder — it holds the full stderr 
 failure. To reproduce a single file by hand:
 
 ```powershell
-markitdown "C:\data\docs\problem.pdf" -o "C:\temp\problem.md"
+markitdown "C:\data2md\docs\problem.pdf" -o "C:\temp\problem.md"
 ```
 
 **Megabytes of base64 in the output, or `.md` files named after `.js` bundles**
